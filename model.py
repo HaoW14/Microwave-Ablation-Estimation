@@ -1,16 +1,11 @@
 import warnings
-
 warnings.filterwarnings("ignore")
-
 import torch.nn as nn
 import torchvision
 from tqdm import tqdm
-
 import torch
 from torch.utils.data import random_split, DataLoader
-
 CUDA = torch.cuda.is_available()
-
 
 class Decoder(nn.Module):
     def __init__(self, in_channels, middle_channels, out_channels):
@@ -28,14 +23,14 @@ class Decoder(nn.Module):
         x1 = self.conv_relu(x1)
         return x1
 
-class Unet(nn.Module):  # resunet模型
+class Unet(nn.Module):  # resunet model
     def __init__(self, n_class):
         super().__init__()
 
         self.base_model = torchvision.models.resnet18(True)
         self.base_layers = list(self.base_model.children())
         self.layer1 = nn.Sequential(
-            nn.Conv2d(1, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False),  # 输入通道为1
+            nn.Conv2d(1, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False),  # input channel = 1
             self.base_layers[1],
             self.base_layers[2])
         self.layer2 = nn.Sequential(*self.base_layers[3:5])
@@ -67,26 +62,26 @@ class Unet(nn.Module):  # resunet模型
         self.sequence = lstm(9)
 
     def forward(self, input, text):
-        e1 = self.layer1(input)  # 64,128,128
-        e2 = self.layer2(e1)  # 64,64,64
-        e3 = self.layer3(e2)  # 128,32,32
-        e4 = self.layer4(e3)  # 256,16,16
-        e5 = self.layer5(e4)  # 512,8,8
+        e1 = self.layer1(input)  
+        e2 = self.layer2(e1)  
+        e3 = self.layer3(e2)  
+        e4 = self.layer4(e3)  
+        e5 = self.layer5(e4)  
 
-        f = self.toseq(e5)
+        f = self.toseq(e5)   ##make the map feature to sequence-like features
         f = torch.squeeze(f,2)
-        f = torch.squeeze(f, 2)
+        f = torch.squeeze(f, 2) #just for linear operation
         feature = self.fc(f)
 
-        d4 = self.decode4(e5, e4)  # 256,16,16
-        d3 = self.decode3(d4, e3)  # 256,32,32
-        d2 = self.decode2(d3, e2)  # 128,64,64
-        d1 = self.decode1(d2, e1)  # 64,128,128
-        d0 = self.decode0(d1)  # 64,256,256
-        out = self.conv_last(d0)  # 1,256,256
+        d4 = self.decode4(e5, e4)  
+        d3 = self.decode3(d4, e3)  
+        d2 = self.decode2(d3, e2)  
+        d1 = self.decode1(d2, e1)  
+        d0 = self.decode0(d1)  
+        out = self.conv_last(d0)  
 
 
-        inp = torch.cat([feature[:, None, :], text], 2)
+        inp = torch.cat([feature[:, None, :], text], 2)  #concat for input of lstm
         pred_time = self.sequence(inp)
         return pred_time, out
 
@@ -99,7 +94,7 @@ class lstm(nn.Module):
     def __init__(self, input_size, hidden_size=4, output_size=1,num_layers = 4):
         super(lstm, self).__init__()
         self.layer2 = nn.LSTM(input_size, 4, num_layers, batch_first= True)
-        self.layer4 = nn.Linear(4, output_size) #加上1 + 6个临床特征做回归
+        self.layer4 = nn.Linear(4, output_size) 
 
     def forward(self, x):
         v2, _ = self.layer2(x)
@@ -111,13 +106,12 @@ class lstm(nn.Module):
 
     def initialize(self):
         for m in self.modules():
-            # 判断这一层是否为线性层，如果为线性层则初始化权值
             if isinstance(m, nn.Linear):
                 #tanh_gain = nn.init.calculate_gain('tanh')
                 #nn.init.xavier_uniform_(m.weight.data, gain=tanh_gain)
                 nn.init.kaiming_normal_(m.weight.data)
 
-class lstm2(nn.Module):
+class lstm2(nn.Module):  #model for needle_distance prediction
     def __init__(self, output_size=1, num_layers=4):
         super(lstm2, self).__init__()
         self.layer2 = nn.LSTM(3, 2, num_layers, batch_first=True)
