@@ -121,3 +121,91 @@ class lstm2(nn.Module):  #model for needle_distance prediction
         v2, _ = self.layer2(x[:, :, :3])
         v = self.layer4(v2)
         return v
+
+def dice(logits, targets,classindex):# logits:b * c * s * h * w     targets: b  s * h * w
+    logits = nn.Softmax(1)(logits)
+    b = logits.size()[0]
+    smooth = 1
+    targets = torch.unsqueeze(targets,1)
+    targets = torch.zeros(logits.shape).cuda().scatter_(1, targets, 1)
+    input_flat = logits[:,classindex,:,:].view(b,-1) # contiguous使内存地址连续，才能用view
+    targets_flat = targets[:,classindex,:,:].view(b,-1)
+
+    intersection = input_flat * targets_flat
+    union = input_flat.sum(1) + targets_flat.sum(1)
+    total_batch_dice = (2. * intersection.sum(1) + smooth) / (union + smooth)
+    mean_batch_dice = total_batch_dice.mean() 
+    return mean_batch_dice
+
+ def train(train_loader, val_loader):
+    mymodel = Unet(2).cuda()
+    mymodel.initialize()
+    criterion1 = nn.CrossEntropyLoss()
+    criterion2 = nn.MSELoss()
+    num_epoch = 500
+
+
+    scheduler_step = num_epoch // 4
+    optimizer = torch.optim.Adam(mymodel.parameters(), lr=0.005)
+    #lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, scheduler_step, 0.001)
+    maxacc = 0.0
+    for epoch in range(num_epoch):
+        epoch_start_time = time.time()
+        train_loss = 0.0
+        val_loss = 0.0
+        train_dice = 0.0
+        val_dice = 0.0
+        mymodel.train()
+        for image, mask,text_x, text_y in tqdm(train_loader, total=len(train_loader)):
+            image = image.cuda().float()
+            print(image.shape)
+            target = torch.squeeze(mask).cuda().long()
+            text_x, text_y = text_x.cuda().float(), text_y.cuda().float()
+            print(text_x.shape)
+            optimizer.zero_grad()
+
+            train_time, output = mymodel(image, text_x)
+            batch_loss = criterion1(output, target) + criterion2(train_time, text_y)
+            train_dice += dice(output, target, 1)
+
+            batch_loss.backward()
+            optimizer.step()
+            train_loss += batch_loss.item()
+
+        train_loss /= len(train_loader)
+        train_dice /= len(train_loader)
+
+        mymodel.eval()  
+        correct = 0
+        with torch.no_grad(): 
+            for image, mask,valtext_x, valtext_y in tqdm(val_loader, total=len(val_loader)):
+                image = image.cuda().float()
+                target = torch.squeeze(mask.cuda().long())
+                valtext_x, valtext_y = valtext_x.cuda().float(), valtext_y.cuda().float()
+
+                pred_time, output = mymodel(image, valtext_x)
+                batch_loss = criterion1(output, target) + criterion2(pred_time, valtext_y)
+
+
+                pred_time, valtext_y = pred_time[:,0,0], valtext_y[:,0,0]
+                correct += ((pred_time-valtext_y*0.9) * (valtext_y*1.2-pred_time) > 0).sum()
+                val_dice += dice(output, target, 1)
+                val_loss += batch_loss.item()
+
+        val_loss /= len(val_loader)
+        val_dice /= len(val_loader)
+        acc = correct / (len(val_loader) * 8)  ##batch=8
+
+        if acc > maxacc:
+            torch.save(mymodel.state_dict(), "time.pkl")
+            maxacc = acc
+
+        if val_dice > 0.8:
+            for name, value in mymodel.named_parameters():
+                if name.split(".")[0] != "sequence": 
+                    value.required_grad = False
+
+        print('[%03d/%03d] %2.2f sec(s) train_loss: %3.6f train_dice: %3.6f| val_loss: %3.6f val_dice: %3.6f acc: %3.6f'% \
+              (epoch + 1, num_epoch, time.time() - epoch_start_time, train_loss, train_dice,
+               val_loss, val_dice, acc))
+    return mymodel
